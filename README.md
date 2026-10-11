@@ -30,7 +30,7 @@
                                    │
                                    ▼
         [ Real-Time Verdict: ALLOW | QUARANTINE | DROP_ALERT ]
-        [ Chained SHA-256 Telemetry Stream to a2zsoc.com Vault ]
+        [ Chained SHA-256 Audit Telemetry (in-process, in-memory log) ]
 ```
 
 ---
@@ -82,7 +82,7 @@ sequenceDiagram
     participant Radar as A2ZSocBeaconBridge
     participant Timing as InterArrivalAnalyzer
     participant Stego as PayloadEntropyScanner
-    participant SOC as a2zsoc Evidence Vault
+    participant Log as In-Process Telemetry Log
 
     Client->>Gateway: POST /api/v1/webhooks/payment
     Gateway->>Radar: inspect_and_log(WebhookEnvelope)
@@ -97,18 +97,25 @@ sequenceDiagram
     
     Radar->>Radar: Compute Composite Threat Score
     
-    alt If Both Beaconing & Steganography (Threat >= 0.85)
-        Radar->>SOC: Chained SHA-256 Audit Hash (DROP_ALERT)
-        Radar-->>Gateway: DROP_ALERT (Terminated inline in < 7 µs)
-        Gateway-->>Client: HTTP 403 / Signature Rejected
-    else If High Entropy Steganography Detected
-        Radar->>SOC: Chained SHA-256 Audit Hash (QUARANTINE_WEBHOOK)
-        Radar-->>Gateway: QUARANTINE_WEBHOOK (Held in Sandbox)
+    alt If Both Beaconing & Steganography Detected
+        Radar->>Log: Chained SHA-256 Telemetry Appended (DROP_ALERT)
+        Radar-->>Gateway: DROP_ALERT (verdict returned to caller)
+    else If Steganography Detected (or composite score >= 0.55)
+        Radar->>Log: Chained SHA-256 Telemetry Appended (QUARANTINE_WEBHOOK)
+        Radar-->>Gateway: QUARANTINE_WEBHOOK (verdict returned to caller)
     else
-        Radar->>SOC: Telemetry Event Logged (ALLOW)
-        Radar-->>Gateway: ALLOW (Forwarded to internal worker)
+        Radar->>Log: Chained SHA-256 Telemetry Appended (ALLOW)
+        Radar-->>Gateway: ALLOW (verdict returned to caller)
     end
 ```
+
+> **Implemented vs. roadmap:** `A2ZSocBeaconBridge.inspect_and_log()` inspects each webhook, chains a
+> SHA-256 audit hash, appends the telemetry event to an in-process list (read it back with
+> `get_telemetry_events()`), and returns the verdict to the caller. This release performs **no
+> network export** of telemetry to an external SOC or vault (such as a2zsoc.com), and it does not
+> itself enforce the verdict — blocking a request (e.g. HTTP 403), sandboxing a quarantined webhook,
+> or forwarding to a worker are the integrating gateway's responsibility. External telemetry export
+> and gateway-side enforcement are **roadmap**, not implemented.
 
 ---
 
